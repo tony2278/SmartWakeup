@@ -3,7 +3,15 @@
  * 功能：通过I2S接口播放"小度小度"唤醒词到外接喇叭
  * 小度通过麦克风听到喇叭声音
  *
- * 依赖库：ESP8266Audio 或 ESP32-audioI2S
+ * 依赖库：
+ * - 无需额外库，使用 ESP32 自带 I2S 驱动
+ *
+ * 使用说明：
+ * 1. 将 xiaoduxiaodu.wav 放入 data 文件夹
+ * 2. 使用 Arduino IDE 的 "ESP32 Sketch Data Upload" 上传音频文件
+ * 3. 上传代码到 ESP32
+ * 4. 连接 I2S 喇叭模块
+ * 5. 按下 BOOT 按钮播放唤醒词
  */
 
 #include <Arduino.h>
@@ -57,6 +65,7 @@ void initI2S() {
 
     i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_PORT, &pin_config);
+    i2s_zero_dma_buffer(I2S_PORT);
 }
 
 /**
@@ -67,11 +76,12 @@ void playWAVFile(const char* filename) {
     File file = SPIFFS.open(filename, "r");
 
     if (!file) {
-        Serial.println("无法打开音频文件!");
+        Serial.println("❌ 无法打开音频文件: " + String(filename));
+        Serial.println("   请确保已通过 'ESP32 Sketch Data Upload' 上传音频文件");
         return;
     }
 
-    Serial.println("开始播放: " + String(filename));
+    Serial.println("▶ 开始播放: " + String(filename));
 
     // 读取 WAV 文件头 (44字节)
     uint8_t header[44];
@@ -79,15 +89,19 @@ void playWAVFile(const char* filename) {
 
     // 简单验证是否为 WAV 文件
     if (header[0] != 'R' || header[1] != 'I' || header[2] != 'F' || header[3] != 'F') {
-        Serial.println("不是有效的WAV文件!");
+        Serial.println("❌ 不是有效的WAV文件!");
         file.close();
         return;
     }
+
+    // 跳过 WAV 头，定位到数据区
+    file.seek(44);
 
     // 读取音频数据并播放
     size_t bytesRead;
     uint8_t buffer[512];
     playStartTime = millis();
+    unsigned long bytesPlayed = 0;
 
     while (millis() - playStartTime < WAKE_WORD_DURATION && file.available()) {
         bytesRead = file.read(buffer, sizeof(buffer));
@@ -95,15 +109,16 @@ void playWAVFile(const char* filename) {
         if (bytesRead > 0) {
             size_t bytesWritten;
             i2s_write(I2S_PORT, buffer, bytesRead, &bytesWritten, portMAX_DELAY);
+            bytesPlayed += bytesWritten;
         }
     }
 
     // 播放静音避免杂音
-    uint8_t silence[512] = {0};
+    uint8_t silence[256] = {0};
     i2s_write(I2S_PORT, silence, sizeof(silence), NULL, 100);
 
     file.close();
-    Serial.println("播放完成");
+    Serial.println("✓ 播放完成 (共播放 " + String(bytesPlayed) + " 字节)");
 }
 
 /**
@@ -111,21 +126,22 @@ void playWAVFile(const char* filename) {
  * 首次运行时调用
  */
 void setupAudioFile() {
-    Serial.println("\n=== 音频文件检查 ===");
+    Serial.println("\n--- 音频文件检查 ---");
 
     if (!SPIFFS.exists(WAKE_WORD_FILE)) {
-        Serial.println("音频文件不存在: " + String(WAKE_WORD_FILE));
+        Serial.println("⚠ 音频文件不存在: " + String(WAKE_WORD_FILE));
         Serial.println("\n请按以下步骤操作:");
-        Serial.println("1. 在项目目录创建 'data' 文件夹");
-        Serial.println("2. 将 xiaoduxiaodu.wav 复制到 data 文件夹");
-        Serial.println("3. 在 Arduino IDE 中选择: 工具 -> ESP32 Sketch Data Upload");
-        Serial.println("4. 重新上传代码\n");
+        Serial.println("  1. 在项目目录创建 'data' 文件夹");
+        Serial.println("  2. 将 xiaoduxiaodu.wav 复制到 data 文件夹");
+        Serial.println("  3. 在 Arduino IDE 中选择: 工具 -> ESP32 Sketch Data Upload");
+        Serial.println("  4. 重新上传代码\n");
     } else {
         File file = SPIFFS.open(WAKE_WORD_FILE, "r");
-        Serial.println("音频文件已就绪: " + String(WAKE_WORD_FILE));
-        Serial.println("文件大小: " + String(file.size()) + " 字节");
+        Serial.println("✓ 音频文件已就绪: " + String(WAKE_WORD_FILE));
+        Serial.println("  文件大小: " + String(file.size()) + " 字节");
         file.close();
     }
+    Serial.println("-------------------\n");
 }
 
 /**
@@ -138,7 +154,7 @@ void checkButton() {
     if (buttonState == LOW && lastButtonState == HIGH) {
         delay(50); // 软件消抖
         if (digitalRead(buttonPin) == LOW) {
-            Serial.println("按钮被按下!");
+            Serial.println("\n🔔 按钮被按下!");
             playWAVFile(WAKE_WORD_FILE);
         }
     }
@@ -153,9 +169,10 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n=== ESP32 蓝牙唤醒词播放器 (I2S版本) ===");
-    Serial.println("版本: 1.0");
-    Serial.println("功能: 通过喇叭播放'小度小度'唤醒词\n");
+    Serial.println("\n========================================");
+    Serial.println("  ESP32 蓝牙唤醒词播放器 (I2S版)");
+    Serial.println("  版本: 1.0");
+    Serial.println("========================================\n");
 
     // 初始化按钮
     pinMode(buttonPin, INPUT_PULLUP);
@@ -164,10 +181,10 @@ void setup() {
     // 初始化 SPIFFS 文件系统
     Serial.println("挂载 SPIFFS 文件系统...");
     if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS 挂载失败!");
+        Serial.println("❌ SPIFFS 挂载失败!");
         return;
     }
-    Serial.println("SPIFFS 挂载成功");
+    Serial.println("✓ SPIFFS 挂载成功");
 
     // 检查/设置音频文件
     setupAudioFile();
@@ -175,13 +192,18 @@ void setup() {
     // 初始化 I2S 音频接口
     Serial.println("初始化 I2S 音频接口...");
     initI2S();
-    Serial.println("I2S 初始化完成");
+    Serial.println("✓ I2S 初始化完成");
 
-    Serial.println("\n系统已启动!");
-    Serial.println("操作说明:");
+    Serial.println("========================================");
+    Serial.println("  系统已启动!");
+    Serial.println("========================================");
+    Serial.println("\n操作说明:");
     Serial.println("  - 按下 BOOT 按钮播放唤醒词");
     Serial.println("  - 确保小度音箱在麦克风范围内");
-    Serial.println("  - I2S 引脚: WS=" + String(I2S_WS_PIN) + " SCK=" + String(I2S_SCK_PIN) + " SD=" + String(I2S_SD_PIN) + "\n");
+    Serial.println("\n硬件连接 (I2S):");
+    Serial.println("  WS (LRCK)  -> GPIO " + String(I2S_WS_PIN));
+    Serial.println("  SCK (BCLK) -> GPIO " + String(I2S_SCK_PIN));
+    Serial.println("  SD (DIN)   -> GPIO " + String(I2S_SD_PIN) + "\n");
 }
 
 /**

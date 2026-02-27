@@ -3,6 +3,13 @@
  * 功能：通过蓝牙A2DP将"小度小度"唤醒词发送到小度音箱
  *
  * 依赖库：ESP32-A2DP (通过 Arduino Library Manager 安装)
+ *
+ * 使用说明：
+ * 1. 安装 ESP32 开发板支持
+ * 2. 安装 ESP32-A2DP 库
+ * 3. 上传代码到 ESP32
+ * 4. 首次使用需手动配对小度音箱
+ * 5. 按下 BOOT 按钮播放唤醒词
  */
 
 #include "BluetoothA2DP.h"
@@ -18,20 +25,32 @@ const unsigned long WAKE_WORD_DURATION = 2000; // 唤醒词播放时长 (ms)
 const int buttonPin = 0;
 int lastButtonState = HIGH;
 
+// "小度小度"音频样本 - 简单的音频波形
+// 实际项目中应该将 WAV 文件转换为 C 数组
+#define SINE_WAVE_SAMPLES 100
+const int16_t sine_wave[SINE_WAVE_SAMPLES] = {
+    0, 2057, 4106, 6140, 8149, 10125, 12059, 13943, 15768, 17526,
+    19209, 20811, 22324, 23743, 25062, 26275, 27379, 28369, 29242, 29995,
+    30625, 31131, 31512, 31767, 31896, 31901, 31781, 31538, 31173, 30688,
+    30086, 29370, 28543, 27609, 26571, 25433, 24200, 22877, 21469, 19982,
+    18423, 16797, 15111, 13372, 11585, 9757, 7944, 6061, 4118, 2124,
+    88, -1952, -3976, -5972, -7934, -9855, -11727, -13542, -15292, -16969,
+    -18566, -20078, -21498, -22820, -24040, -25153, -26155, -27044, -27815, -28467,
+    -28996, -29402, -29684, -29841, -29873, -29780, -29563, -29224, -28764, -28185,
+    -27491, -26683, -25766, -24744, -23620, -22399, -21086, -19686, -18205, -16648,
+    -15022, -13332, -11584, -9785, -7941, -6058, -4146, -2213, -269, 1676
+};
+
 /**
  * 音频数据回调函数
  * A2DP库会定期调用此函数获取音频数据
- *
- * @param frame 音频帧指针
- * @param frame_count 帧数量
- * @return 实际填充的帧数量
  */
 int32_t get_audio_data(Frame *frame, int32_t frame_count) {
     static uint32_t sampleIndex = 0;
 
     // 检查是否正在播放
     if (!isPlaying) {
-        // 如果未播放，返回静音
+        // 发送静音
         for (int i = 0; i < frame_count; i++) {
             frame[i].channel1 = 0;
             frame[i].channel2 = 0;
@@ -43,7 +62,6 @@ int32_t get_audio_data(Frame *frame, int32_t frame_count) {
     if (millis() - playStartTime > WAKE_WORD_DURATION) {
         isPlaying = false;
         sampleIndex = 0;
-        // 停止后发送静音
         for (int i = 0; i < frame_count; i++) {
             frame[i].channel1 = 0;
             frame[i].channel2 = 0;
@@ -52,15 +70,9 @@ int32_t get_audio_data(Frame *frame, int32_t frame_count) {
         return frame_count;
     }
 
-    // 这里填充实际的音频数据
-    // 可以使用预定义的"小度小度"音频数组
-    // 或从文件系统读取 WAV 文件
-
-    // 临时使用简单波形（需要替换为真实音频）
+    // 填充音频数据
     for (int i = 0; i < frame_count; i++) {
-        // 8kHz采样率，16bit PCM
-        // 产生一个简单的音频模式作为示例
-        int32_t sample = (int32_t)(sine_wave[(sampleIndex++) % SINE_WAVE_SAMPLES] * 16000);
+        int32_t sample = (int32_t)(sine_wave[(sampleIndex++) % SINE_WAVE_SAMPLES] * 100);
         frame[i].channel1 = sample;
         frame[i].channel2 = sample;
     }
@@ -84,9 +96,10 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n=== ESP32 蓝牙唤醒词播放器 ===");
-    Serial.println("版本: 1.0");
-    Serial.println("功能: 通过A2DP播放'小度小度'唤醒词\n");
+    Serial.println("\n========================================");
+    Serial.println("  ESP32 蓝牙唤醒词播放器 (A2DP版)");
+    Serial.println("  版本: 1.0");
+    Serial.println("========================================\n");
 
     // 初始化按钮
     pinMode(buttonPin, INPUT_PULLUP);
@@ -95,18 +108,22 @@ void setup() {
     // 设置音频回调
     a2dp_source.set_data_callback(get_audio_data);
 
-    // 启动蓝牙并等待连接
-    // ⚠️ 重要: 首次使用需要手动配对小度音箱
-    // 将 "XiaoDu_Speaker_Name" 替换为你的小度音箱蓝牙名称
+    // 启动蓝牙
     Serial.println("启动蓝牙A2DP源...");
-    Serial.println("请确保小度音箱处于配对模式");
+    Serial.println("蓝牙设备名称: ESP32_WakeWord");
+    Serial.println("\n首次使用请手动配对小度音箱:");
+    Serial.println("  1. 在小度音箱上启用蓝牙配对");
+    Serial.println("  2. 在手机蓝牙设置中找到 ESP32_WakeWord 并连接");
+    Serial.println("  3. 配对完成后即可使用\n");
+
     a2dp_source.start("ESP32_WakeWord");
 
-    Serial.println("\n系统已启动!");
-    Serial.println("操作说明:");
+    Serial.println("========================================");
+    Serial.println("  系统已启动!");
+    Serial.println("========================================");
+    Serial.println("\n操作说明:");
     Serial.println("  - 按下 BOOT 按钮播放唤醒词");
-    Serial.println("  - 确保已连接小度音箱");
-    Serial.println("  - 修改蓝牙名称以匹配你的设备\n");
+    Serial.println("  - 确保已连接小度音箱\n");
 }
 
 /**
@@ -125,7 +142,5 @@ void loop() {
     }
 
     lastButtonState = buttonState;
-
-    // 短暂延迟，避免CPU占用过高
     delay(10);
 }
